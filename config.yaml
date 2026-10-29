@@ -1,0 +1,51 @@
+---
+- hosts: all
+  become: true
+  tasks:
+
+  - name: Create a directory if it does not exist (Ubuntu)
+    ansible.builtin.file:
+      path: /tmp/mde_install
+      state: directory
+      mode: '0755'
+    when: ansible_distribution == "Ubuntu"
+
+  - name: Copy Onboarding Script (Ubuntu)
+    ansible.builtin.copy:
+      remote_src: "{{ onboarding_json }}"
+      dest: /tmp/mde_install/mdatp_onboard.json
+    when: ansible_distribution == "Ubuntu"
+  - name: Install MDE on host (Ubuntu)
+    ansible.builtin.script: "{{ mde_installer_script }} --install --channel {{ channel | default('insiders-fast') }} --onboard /tmp/mde_install/mdatp_onboard.json"
+    register: script_output
+    args:
+      executable: sudo
+    when: ansible_distribution == "Ubuntu"
+
+  - name: Create a directory if it does not exist (CentOS)
+    ansible.builtin.file:
+      path: /tmp/mde_install
+      state: directory
+      mode: '0755'
+    when: ansible_distribution == "CentOS"
+
+  - name: Copy Onboarding Script (CentOS)
+    ansible.builtin.copy:
+     remote_src: "{{ onboarding_json }}"
+     dest: /tmp/mde_install/mdatp_onboard.json
+    when: ansible_distribution == "CentOS"
+  - name: Install MDE on host (Centos)
+    ansible.builtin.script: "{{ mde_installer_script }} --install --channel {{ channel | default('insiders-fast') }} --onboard /tmp/mde_install/mdatp_onboard.json"
+    register: script_output
+    args:
+      executable: sudo
+    when: ansible_distribution == "CentOS"
+
+  - name: Display the installation output
+    debug:
+      msg: "Return code [{{ script_output.rc }}] {{ script_output.stdout }}"
+
+  - name: Display any installation error
+    debug:
+      msg: "{{ script_output.stderr }}"
+

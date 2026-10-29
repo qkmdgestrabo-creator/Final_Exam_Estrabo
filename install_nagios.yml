@@ -1,0 +1,163 @@
+---
+- hosts: all
+  become: true
+  vars:
+    nagios_version: "4.4.14"
+    plugins_version: "2.4.6"
+  tasks:
+
+  - name: install Nagios dependencies on Ubuntu
+    ansible.builtin.apt:
+      name:
+        - autoconf
+        - gcc
+        - libc6
+        - make
+        - wget
+        - unzip
+        - apache2
+        - apache2-utils
+        - php
+        - libapache2-mod-php
+        - libgd-dev
+        - libssl-dev
+        - bc
+        - gawk
+        - dc
+        - gettext
+      state: present
+      update_cache: yes
+    when: ansible_distribution == "Ubuntu"
+
+  - name: Enable PowerTools / CRB repo on CentOS
+    ansible.builtin.command: dnf config-manager --set-enabled powertools
+    failed_when: false
+    when: ansible_distribution == "CentOS"
+
+
+  - name: Install Nagios dependencies on CentOS
+    ansible.builtin.dnf:
+      name:
+       - gcc
+       - glibc
+       - glibc-common
+       - make
+       - gettext
+       - automake
+       - autoconf
+       - wget
+       - unzip
+       - httpd
+       - httpd-tools
+       - php
+       - gd
+       - gd-devel
+       - openssl-devel
+       - perl
+      state: present
+      update_cache: yes
+    when: ansible_distribution == "CentOS"
+
+
+  - name: Create Users and Groups
+    ansible.builtin.group:
+      name: nagcmd
+      state: present
+
+  - name: Create nagios user
+    ansible.builtin.user:
+      name: nagios
+      group: nagcmd
+      state: present
+
+  - name: Add web server user to nagcmd group
+    ansible.builtin.user:
+      name: "{{ 'www-data' if ansible_distribution == 'Ubuntu' else 'apache' }}"
+      groups: nagcmd
+      append: yes
+
+  - name: Download and extract nagios core
+    ansible.builtin.get_url:
+      url: "https://assets.nagios.com/downloads/nagioscore/releases/nagios-4.4.14.tar.gz"
+      dest: "/tmp/nagios-4.4.14.tar.gz"
+
+  - name: Extract nagios core archive
+    ansible.builtin.unarchive:
+      src: "/tmp/nagios-4.4.14.tar.gz"
+      dest: /tmp
+      remote_src: yes
+
+  - name: Build and install nagios core
+    ansible.builtin.shell: |
+      ./configure --with-command-group=nagcmd
+      make all
+      make install
+      make install-commandmode
+      make install-init
+      make install-config
+      make install-webconf
+    args:
+      chdir: "/tmp/nagios-{{ nagios_version }}"
+      creates: /usr/local/nagios/bin/nagios
+    ignore_errors: yes
+
+  - name: Enables web modules (Ubuntu only)
+    community.general.apache2_module:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - rewrite
+      - cgi
+    when: ansible_distribution == "Ubuntu"
+
+  - name: Create htpasswd file for nagiosadmin
+    ansible.builtin.command:
+      cmd: htpaswd -b -c /usr/local/nagios/etc/htpasswd.users nagiosadmin YourSecuredPassword123
+      creates: /usr/local/nagios/etc/htpasswd.users
+
+  - name: Set permissions on htpasswd file
+    ansible.builtin.file:
+      path: /usr/local/nagios/etc/htpasswd.users
+      owner: nagios
+      group: "{{ 'www-data' if ansible_distribution == 'Ubuntu' else 'apache' }}"
+      mode: '0640'
+
+  - name: Download nagios plugins source
+    ansible.builtin.get_url:
+      url: "https://github.com/nagios-plugins/nagios-plugins/releases/download/release-{{ plugins_version }}/nagios-plugins-{{ plugins_version }}.tar.gz"
+
+  - name: Extract nagios plugins archive
+    ansible.builtin.unarchive:
+      src: "/tmp/nagios-plugins{{ plugins_version }}.tar.gz"
+      dest: /tmp
+      remote_src: yes
+
+  - name: Build and install nagios plugins
+    ansible.builtin.shell: |
+      ./configure --with-nagios-user=nagios --with-nagios-group=nagios
+      make
+      make install
+    args:
+      chdir: "/tmp/nagios-plugins-{{ plugins_version }}"
+      creates: /usr/local/nagios/libexec/check_ping
+
+  - name: Start and Enable Web Server
+    ansible.builtin.systemd:
+      name: "{{ 'apache2' if ansible_distribution == 'Ubuntu' else 'httpd' }}"
+      state: restarted
+      enabled: yes
+
+  - name: Start and Enable Nagios Services
+    ansible.builtin.systemd:
+      name: nagios
+      state: started
+      enabled: yes
+
+  - name: Verify Nagios Configuration
+    ansible.builtin.command: /usr/local/nagios/bin/nagios -v /usr/local/nagios/etc/nagios.cfg
+    register: nagios_verify
+    changed_when: false
+
+  - name: Display verification output
+    ansible.builtin.debug:
+      var: nagios_verify.stdout_lines
